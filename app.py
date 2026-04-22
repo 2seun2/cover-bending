@@ -2,23 +2,31 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
-# --- [1] 재질 데이터베이스 (Lotte Chemical TDS 참고치) ---
-# 밀도(kg/m^3), 탄성계수(Pa), 포아송비
+# --- [1] 재질 데이터베이스 (Lotte Chemical TDS 및 업계 표준 물성치) ---
 MATERIALS = {
-    "PC+ABS (Standard)": {
-        "density": 1150.0, 
-        "E": 2400e6, 
-        "poisson": 0.38
-    },
     "PC+ABS+ED20 (Lotte Chemical)": {
         "density": 1200.0, 
         "E": 2800e6, 
-        "poisson": 0.38
+        "poisson": 0.38,
+        "desc": "고강성, 난연성 TV 커버 표준 재질"
+    },
+    "PC+ABS (Standard)": {
+        "density": 1150.0, 
+        "E": 2400e6, 
+        "poisson": 0.38,
+        "desc": "범용 PC+ABS 합금 수지"
+    },
+    "HIPS (High Impact PS)": {
+        "density": 1050.0, 
+        "E": 1850e6, 
+        "poisson": 0.40,
+        "desc": "충격 보강 폴리스티렌, 성형성 우수하나 강성 낮음"
     },
     "ABS (High Rigidity)": {
         "density": 1050.0, 
         "E": 2200e6, 
-        "poisson": 0.39
+        "poisson": 0.39,
+        "desc": "일반 고강성 ABS"
     }
 }
 
@@ -33,29 +41,25 @@ def calculate_dimensions(inch):
     return W, H
 
 def calculate_deflection_mesh(W_mm, H_mm, t_mm, density, E, poisson, mesh_res=50):
-    """
-    평판 전체의 처짐 분포 계산 (Navier's Solution)
-    W_mm: 가로, H_mm: 세로, t_mm: 두께
-    """
-    # 단위 변환 (mm -> m)
+    """단순 지지 평판의 Navier's Solution 기반 처짐 연산"""
     W_m, H_m, t_m = W_mm / 1000, H_mm / 1000, t_mm / 1000
     
-    # 1. 자체 중량 및 등분포 하중(q, N/m^2) 계산
+    # 1. 자체 중량 및 등분포 하중 계산
     volume = W_m * H_m * t_m
     weight_kg = volume * density
     q = (weight_kg * 9.81) / (W_m * H_m) 
     
-    # 2. 굽힘 강성 (Flexural Rigidity, D)
+    # 2. 굽힘 강성 (D)
     D = (E * t_m**3) / (12 * (1 - poisson**2))
     
-    # 3. 메쉬 그리드 생성 (m 단위)
+    # 3. 메쉬 그리드 생성
     x = np.linspace(0, W_m, mesh_res)
     y = np.linspace(0, H_m, mesh_res)
     X, Y = np.meshgrid(x, y)
     
-    # 4. Navier's Series Solution (단순 지지 평판 처짐 공식)
+    # 4. Navier's Series Solution 합산
     Z_deflection = np.zeros_like(X)
-    max_terms = 15 # 수렴을 위한 급수 항 수
+    max_terms = 15
     
     for m in range(1, max_terms, 2):
         for n in range(1, max_terms, 2):
@@ -66,88 +70,87 @@ def calculate_deflection_mesh(W_mm, H_mm, t_mm, density, E, poisson, mesh_res=50
     return X * 1000, Y * 1000, Z_deflection * 1000, weight_kg
 
 # --- [2] Streamlit UI 구성 ---
-st.set_page_config(page_title="TV REAR-COVER 3D 해석", layout="wide")
+st.set_page_config(page_title="TV REAR-COVER 강성 해석", layout="wide")
 st.title("📺 TV COVER-REAR 3D 강성 해석 프로그램")
-st.info("기구 설계자를 위한 자중 기반 처짐량 예측 시뮬레이터입니다.")
+st.info("요청하신 인치별 프리셋 버튼을 통해 빠르게 자중 처짐량을 확인할 수 있습니다.")
 
-# 사이드바 입력
 with st.sidebar:
     st.header("⚙️ 설계 파라미터")
     
-    tv_inch = st.number_input("TV 사이즈 (Inch)", min_value=10.0, max_value=110.0, value=65.0, step=1.0)
-    thickness = st.slider("부품 두께 (t, mm)", min_value=1.0, max_value=5.0, value=2.5, step=0.1)
-    material_choice = st.selectbox("재질 선택 (Lotte Chemical)", list(MATERIALS.keys()), index=1)
+    # [인치 선택 버튼 적용]
+    st.write("**TV 사이즈 선택 (Inch)**")
+    inch_options = [43, 55, 65, 75, 85, 98, 115, 130]
+    # 가로형 버튼 느낌을 주기 위해 radio 사용 (또는 selectbox)
+    selected_inch = st.radio("인치 프리셋", inch_options, index=2, horizontal=True)
     
     st.markdown("---")
-    deflection_scale = st.slider("시각화 처짐 배율", min_value=1, max_value=200, value=50, step=5)
-    st.caption("※ 실제 처짐은 mm 단위이므로 형상 확인을 위해 배율을 적용합니다.")
+    thickness = st.slider("부품 두께 (t, mm)", min_value=1.0, max_value=6.0, value=2.5, step=0.1)
+    
+    material_choice = st.selectbox("재질 선택", list(MATERIALS.keys()), index=0)
+    st.caption(f"ℹ️ {MATERIALS[material_choice]['desc']}")
+    
+    st.markdown("---")
+    deflection_scale = st.slider("시각화 처짐 배율", min_value=1, max_value=500, value=100, step=10)
 
-# --- [3] 연산 실행 ---
+# --- [3] 연산 및 결과 시각화 ---
 mat_props = MATERIALS[material_choice]
-
-# 1. 가로 세로 치수 결정
-W_calc, H_calc = calculate_dimensions(tv_inch)
-
-# 2. 3D 메쉬 및 처짐량 계산 (인자 6개 정확히 전달)
+W_calc, H_calc = calculate_dimensions(selected_inch)
 X_mm, Y_mm, Z_def_mm, weight = calculate_deflection_mesh(
-    W_calc, 
-    H_calc, 
-    thickness, 
-    mat_props["density"], 
-    mat_props["E"], 
-    mat_props["poisson"]
+    W_calc, H_calc, thickness, mat_props["density"], mat_props["E"], mat_props["poisson"]
 )
-
 max_def = np.max(Z_def_mm)
 
-# --- [4] 결과 표시 (2단 레이아웃) ---
 col1, col2 = st.columns([1.5, 1])
 
 with col1:
-    st.subheader(f"🌐 3D 처짐 분포 (Max: {max_def:.3f} mm)")
-    
-    # 처짐 형상 시각화 데이터 (Z축은 아래로 처지므로 마이너스)
+    st.subheader(f"🌐 {selected_inch}인치 3D 처짐 분포 (Max: {max_def:.3f} mm)")
+    # 시각화 데이터 (Z축 하향 처짐)
     Z_visual = -(Z_def_mm * deflection_scale)
     
     fig = go.Figure(data=[go.Surface(
         x=X_mm, y=Y_mm, z=Z_visual,
-        surfacecolor=Z_def_mm, # 실제 처짐값으로 색상 표시
+        surfacecolor=Z_def_mm,
         colorscale='Viridis',
-        colorbar=dict(title="Deflection(mm)"),
-        hovertemplate='W:%{x:.1f}mm<br>H:%{y:.1f}mm<br>Def:%{surfacecolor:.3f}mm<extra></extra>'
+        colorbar=dict(title="실제 처짐(mm)"),
+        hovertemplate='가로:%{x:.0f}mm<br>세로:%{y:.0f}mm<br>처짐:%{surfacecolor:.3f}mm<extra></extra>'
     )])
 
     fig.update_layout(
         scene=dict(
             xaxis_title='Width (mm)',
             yaxis_title='Height (mm)',
-            zaxis_title='Deflection (Scaled)',
-            aspectmode='data'
+            zaxis_title='Scaled Deflection',
+            aspectmode='data' # 실제 가로/세로 비율 유지
         ),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=600
+        margin=dict(l=0, r=0, t=0, b=0), height=650
     )
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.subheader("📋 해석 데이터 요약")
+    st.subheader("📋 해석 결과 요약")
     
-    st.metric("예상 중량", f"{weight:.2f} kg")
-    st.metric("최대 처짐량", f"{max_def:.3f} mm")
+    # 주요 지표 메트릭
+    m_col1, m_col2 = st.columns(2)
+    m_col1.metric("선택 사이즈", f"{selected_inch} inch")
+    m_col2.metric("예상 중량", f"{weight:.2f} kg")
     
-    with st.expander("상세 물성치 보기"):
-        st.write(f"가로: {W_calc:.1f} mm / 세로: {H_calc:.1f} mm")
-        st.write(f"밀도: {mat_props['density']} kg/m³")
-        st.write(f"탄성계수: {mat_props['E']/1e6:.0f} MPa")
+    st.metric("최대 처짐량 (Center)", f"{max_def:.3f} mm")
     
+    with st.expander("세부 데이터 확인"):
+        st.write(f"**규격:** {W_calc:.1f} x {H_calc:.1f} mm")
+        st.write(f"**재질:** {material_choice}")
+        st.write(f"**탄성계수:** {mat_props['E']/1e6:.0f} MPa")
+        st.write(f"**면적:** {(W_calc*H_calc/1000000):.2f} m²")
+
     st.markdown("---")
     st.subheader("🛠️ Engineering Advice")
     
+    # 처짐량에 따른 설계 가이드 로직
     if max_def > 1.5:
-        st.error(f"**강성 부족:** 처짐량이 {max_def:.2f}mm로 큽니다. 리브 구조를 추가하거나 두께를 최소 {thickness + 0.5}mm 이상으로 검토하세요.")
-    elif max_def > 0.8:
-        st.warning("**보강 검토:** 자중 처짐이 다소 발생합니다. 주요 조립 체결부 근처에 보강 리브를 배치하십시오.")
+        st.error(f"**강성 위험:** {selected_inch}인치의 거대 사이즈 대비 두께({thickness}mm)가 얇습니다. 중앙부 처짐이 심하므로 리브 보강 및 두께 상향이 필수입니다.")
+    elif max_def > 0.7:
+        st.warning("**주의:** 자중으로 인한 처짐이 관찰됩니다. 조립 시 하중 분산을 위해 보강 구조를 검토하십시오.")
     else:
-        st.success("**안정적:** 자중에 의한 처짐이 제어 범위 내에 있습니다.")
-
-    st.caption("본 결과는 단순 지지 조건의 이론적 계산치이며, 실제 사출물의 리브 구조나 구속 조건에 따라 달라질 수 있습니다.")
+        st.success("**안정:** 현재 재질 및 두께 조건에서 강성이 양호합니다.")
+    
+    st.info("💡 **Tip:** 85인치 이상의 초대형 모델은 자중뿐만 아니라 사출 시 수축 변형(Warpage) 관리가 중요하므로 금형 냉각 레이아웃도 함께 고려하세요.")
